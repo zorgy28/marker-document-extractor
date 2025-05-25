@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Marker Document Extractor</title>
+    <style>
+        body { font-family: Arial, sans-serif; background: #f7f7f7; margin: 0; padding: 0; }
+        .container { max-width: 600px; margin: 40px auto; background: #fff; padding: 32px; border-radius: 12px; box-shadow: 0 2px 12px rgba(0,0,0,0.08); }
+        h2 { text-align: center; color: #333; }
+        label { display: block; margin-bottom: 8px; font-weight: bold; }
+        input[type="file"], select, input[type="text"], input[type="password"] { display: block; margin-bottom: 16px; width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; }
+        input[type="checkbox"] { display: inline; margin-right: 8px; width: auto; }
+        button { background: #2563eb; color: #fff; border: none; padding: 12px 24px; border-radius: 6px; font-size: 1rem; cursor: pointer; }
+        .section { margin: 24px 0; padding: 16px; background: #f8f9fa; border-radius: 6px; border-left: 4px solid #2563eb; }
+        .section h3 { margin: 0 0 16px 0; color: #2563eb; font-size: 1rem; }
+        button:disabled { background: #a5b4fc; }
+        .result { margin-top: 24px; background: #f1f5f9; padding: 16px; border-radius: 6px; font-size: 0.95rem; word-break: break-all; }
+        .error { color: #dc2626; margin-top: 16px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h2>Marker Document Extractor</h2>
+        <form id="uploadForm">
+            <label for="file">Select a document to extract:</label>
+            <input type="file" id="file" name="file" accept=".pdf" required />
+            
+            <div class="section">
+                <h3>Output Settings</h3>
+                <label for="outputFormat">Output Format:</label>
+                <select id="outputFormat" name="outputFormat">
+                    <option value="json">JSON</option>
+                    <option value="markdown">Markdown</option>
+                    <option value="html">HTML</option>
+                </select>
+                
+                <label for="extractImages">
+                    <input type="checkbox" id="extractImages" name="extractImages" checked />
+                    Extract images from document
+                </label>
+                
+                <label for="paginateOutput">
+                    <input type="checkbox" id="paginateOutput" name="paginateOutput" />
+                    Paginate output
+                </label>
+            </div>
+            
+            <div class="section">
+                <h3>LLM Processing</h3>
+                <label for="useLlm">
+                    <input type="checkbox" id="useLlm" name="useLlm" />
+                    Use LLM for higher quality processing
+                </label>
+                
+                <label for="llmService">LLM Service:</label>
+                <select id="llmService" name="llmService">
+                    <option value="gemini">Google Gemini (Cloud API)</option>
+                    <option value="ollama">Local Ollama (Private)</option>
+                </select>
+                
+                <div id="geminiOptions">
+                    <label for="googleApiKey">Google API Key (optional, if not in .env):</label>
+                    <input type="password" id="googleApiKey" name="googleApiKey" placeholder="Your Google Gemini API key" />
+                </div>
+                
+                <div id="ollamaOptions" style="display: none;">
+                    <label for="ollamaBaseUrl">Ollama Base URL:</label>
+                    <input type="text" id="ollamaBaseUrl" name="ollamaBaseUrl" value="http://localhost:11434" placeholder="http://localhost:11434" />
+                    
+                    <label for="ollamaModel">Ollama Model:</label>
+                    <select id="ollamaModel" name="ollamaModel">
+                        <option value="llama2">llama2</option>
+                        <option value="llama3">llama3</option>
+                        <option value="llama3.1">llama3.1</option>
+                        <option value="llama3.2">llama3.2</option>
+                        <option value="qwen2.5">qwen2.5</option>
+                        <option value="phi3">phi3</option>
+                        <option value="mistral">mistral</option>
+                        <option value="codellama">codellama</option>
+                        <option value="custom">Custom Model</option>
+                    </select>
+                    
+                    <input type="text" id="customOllamaModel" name="customOllamaModel" placeholder="Enter custom model name" style="display: none;" />
+                </div>
+            </div>
+            
+            <div class="section">
+                <h3>Processing Options</h3>
+                <label for="pageRange">Page Range (optional):</label>
+                <input type="text" id="pageRange" name="pageRange" placeholder="e.g., 0,5-10,20" />
+                
+                <label for="languages">OCR Languages (optional):</label>
+                <input type="text" id="languages" name="languages" placeholder="e.g., en,fr,de" />
+                
+                <label for="workers">Number of Workers:</label>
+                <select id="workers" name="workers">
+                    <option value="1">1 (Default)</option>
+                    <option value="2">2</option>
+                    <option value="4">4</option>
+                    <option value="8">8</option>
+                </select>
+            </div>
+            
+            <div class="section">
+                <h3>Advanced OCR Options</h3>
+                <label for="forceOcr">
+                    <input type="checkbox" id="forceOcr" name="forceOcr" />
+                    Force OCR on entire document
+                </label>
+                
+                <label for="stripExistingOcr">
+                    <input type="checkbox" id="stripExistingOcr" name="stripExistingOcr" />
+                    Remove existing OCR text and re-process
+                </label>
+                
+                <label for="debugMode">
+                    <input type="checkbox" id="debugMode" name="debugMode" />
+                    Enable debug mode
+                </label>
+            </div>
+            
+            <div style="display: flex; gap: 10px; align-items: center;">
+                <button type="submit">Extract</button>
+                <button type="button" id="savePreferences" style="background: #64748b;">Save Preferences</button>
+            </div>
+        </form>
+        <div class="result" id="result" style="display:none;"></div>
+        <div class="error" id="error" style="display:none;"></div>
+    </div>
+    <script>
+    const form = document.getElementById('uploadForm');
+    const resultDiv = document.getElementById('result');
+    const errorDiv = document.getElementById('error');
+    
+    // Load preferences on page load
+    async function loadPreferences() {
+        try {
+            const response = await fetch('/preferences');
+            const preferences = await response.json();
+            
+            // Apply preferences to form elements
+            if (preferences.llmService) {
+                document.getElementById('llmService').value = preferences.llmService;
+                // Trigger change event to show/hide relevant options
+                document.getElementById('llmService').dispatchEvent(new Event('change'));
+            }
+            if (preferences.ollamaModel) {
+                document.getElementById('ollamaModel').value = preferences.ollamaModel;
+            }
+            if (preferences.ollamaBaseUrl) {
+                document.getElementById('ollamaBaseUrl').value = preferences.ollamaBaseUrl;
+            }
+            if (preferences.outputFormat) {
+                document.getElementById('outputFormat').value = preferences.outputFormat;
+            }
+            if (preferences.extractImages !== undefined) {
+                document.getElementById('extractImages').checked = preferences.extractImages;
+            }
+            if (preferences.workers) {
+                document.getElementById('workers').value = preferences.workers;
+            }
+            if (preferences.useLlm !== undefined) {
+                document.getElementById('useLlm').checked = preferences.useLlm;
+            }
+            
+            console.log('Preferences loaded:', preferences);
+        } catch (error) {
+            console.error('Failed to load preferences:', error);
+        }
+    }
+    
+    // Load preferences when page loads
+    document.addEventListener('DOMContentLoaded', loadPreferences);
+    
+    // Save preferences manually
+    document.getElementById('savePreferences').addEventListener('click', async function() {
+        try {
+            const preferences = {
+                llmService: document.getElementById('llmService').value,
+                ollamaModel: document.getElementById('ollamaModel').value === 'custom' 
+                    ? document.getElementById('customOllamaModel').value 
+                    : document.getElementById('ollamaModel').value,
+                ollamaBaseUrl: document.getElementById('ollamaBaseUrl').value,
+                outputFormat: document.getElementById('outputFormat').value,
+                extractImages: document.getElementById('extractImages').checked,
+                workers: parseInt(document.getElementById('workers').value),
+                useLlm: document.getElementById('useLlm').checked
+            };
+            
+            const response = await fetch('/preferences', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(preferences)
+            });
+            
+            if (response.ok) {
+                this.textContent = 'Saved!';
+                this.style.background = '#059669';
+                setTimeout(() => {
+                    this.textContent = 'Save Preferences';
+                    this.style.background = '#64748b';
+                }, 2000);
+            } else {
+                throw new Error('Failed to save preferences');
+            }
+        } catch (error) {
+            console.error('Failed to save preferences:', error);
+            this.textContent = 'Error!';
+            this.style.background = '#dc2626';
+            setTimeout(() => {
+                this.textContent = 'Save Preferences';
+                this.style.background = '#64748b';
+            }, 2000);
+        }
+    });
+    
+    // Handle LLM service selection
+    document.getElementById('llmService').addEventListener('change', function() {
+        const geminiOptions = document.getElementById('geminiOptions');
+        const ollamaOptions = document.getElementById('ollamaOptions');
+        
+        if (this.value === 'ollama') {
+            geminiOptions.style.display = 'none';
+            ollamaOptions.style.display = 'block';
+            checkOllamaStatus();
+        } else {
+            geminiOptions.style.display = 'block';
+            ollamaOptions.style.display = 'none';
+        }
+    });
+    
+    // Check Ollama status and populate models
+    async function checkOllamaStatus() {
+        try {
+            const baseUrl = document.getElementById('ollamaBaseUrl').value;
+            const response = await fetch(`/ollama/status?base_url=${encodeURIComponent(baseUrl)}`);
+            const data = await response.json();
+            
+            if (data.status === 'running' && data.models.length > 0) {
+                // Update model dropdown with available models
+                const modelSelect = document.getElementById('ollamaModel');
+                const currentValue = modelSelect.value;
+                
+                // Clear existing options except 'custom'
+                modelSelect.innerHTML = '';
+                
+                // Add available models
+                data.models.forEach(model => {
+                    const option = document.createElement('option');
+                    option.value = model;
+                    option.textContent = model;
+                    modelSelect.appendChild(option);
+                });
+                
+                // Add custom option
+                const customOption = document.createElement('option');
+                customOption.value = 'custom';
+                customOption.textContent = 'Custom Model';
+                modelSelect.appendChild(customOption);
+                
+                // Try to restore previous selection or preferences
+                const preferences = await fetch('/preferences').then(r => r.json()).catch(() => ({}));
+                const preferredModel = preferences.ollamaModel || currentValue;
+                
+                if (preferredModel && [...modelSelect.options].some(opt => opt.value === preferredModel)) {
+                    modelSelect.value = preferredModel;
+                }
+                
+                console.log('Ollama is running with models:', data.models);
+            } else {
+                console.warn('Ollama status:', data.message || 'No models available');
+            }
+        } catch (error) {
+            console.error('Error checking Ollama status:', error);
+        }
+    }
+    
+    // Handle custom Ollama model selection
+    document.getElementById('ollamaModel').addEventListener('change', function() {
+        const customInput = document.getElementById('customOllamaModel');
+        if (this.value === 'custom') {
+            customInput.style.display = 'block';
+        } else {
+            customInput.style.display = 'none';
+        }
+    });
+
+    form.addEventListener('submit', async (e) => {
+        e.preventDefault(); // Prevent default form submission
+        resultDiv.style.display = 'none';
+        errorDiv.style.display = 'none';
+        const fileInput = document.getElementById('file');
+        if (!fileInput.files.length) {
+            errorDiv.textContent = 'No file selected';
+            errorDiv.style.display = 'block';
+            return;
+        }
+        const formData = new FormData();
+        formData.append('file', fileInput.files[0]);
+        formData.append('outputFormat', document.getElementById('outputFormat').value);
+        formData.append('useLlm', document.getElementById('useLlm').checked);
+        formData.append('llmService', document.getElementById('llmService').value);
+        formData.append('googleApiKey', document.getElementById('googleApiKey').value);
+        formData.append('ollamaBaseUrl', document.getElementById('ollamaBaseUrl').value);
+        
+        // Handle custom Ollama model
+        const ollamaModel = document.getElementById('ollamaModel').value;
+        const customModel = document.getElementById('customOllamaModel').value;
+        formData.append('ollamaModel', ollamaModel === 'custom' ? customModel : ollamaModel);
+        
+        formData.append('extractImages', document.getElementById('extractImages').checked);
+        formData.append('pageRange', document.getElementById('pageRange').value);
+        formData.append('languages', document.getElementById('languages').value);
+        formData.append('workers', document.getElementById('workers').value);
+        formData.append('forceOcr', document.getElementById('forceOcr').checked);
+        formData.append('stripExistingOcr', document.getElementById('stripExistingOcr').checked);
+        formData.append('paginateOutput', document.getElementById('paginateOutput').checked);
+        formData.append('debugMode', document.getElementById('debugMode').checked);
+        console.log('Submitting file:', fileInput.files[0]);
+        try {
+            const response = await fetch('/extract', {
+                method: 'POST',
+                body: formData
+            });
+            console.log('Response status:', response.status);
+            if (!response.ok) {
+                let errMsg = 'Extraction failed';
+                try {
+                    const err = await response.json();
+                    errMsg = err.error || errMsg;
+                } catch (jsonErr) {
+                    errMsg = errMsg + ' (no JSON error message)';
+                }
+                throw new Error(errMsg);
+            }
+            const data = await response.json();
+            console.log('Extraction result:', data);
+            
+            // Display result based on format
+            if (data.format && data.format !== 'json') {
+                if (data.format === 'html') {
+                    resultDiv.innerHTML = data.content;
+                } else {
+                    resultDiv.textContent = data.content;
+                }
+            } else {
+                resultDiv.textContent = JSON.stringify(data, null, 2);
+            }
+            resultDiv.style.display = 'block';
+        } catch (err) {
+            errorDiv.textContent = err.message;
+            errorDiv.style.display = 'block';
+            console.error('Error during extraction:', err);
+        }
+    });
+</script>
+</body>
+</html>
