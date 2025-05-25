@@ -10,13 +10,14 @@ A web-based document extraction tool that converts PDF documents to structured f
 
 ## 🚀 Features
 
-- **Multiple Output Formats**: Convert PDFs to JSON, Markdown, or HTML
+- **Multiple Output Formats**: Convert PDFs to JSON, Markdown, or HTML with proper format selection
 - **LLM Processing**: Enhanced extraction using Google Gemini or local Ollama models
 - **Image Extraction**: Automatically extract and serve images from documents
 - **Advanced Options**: Page range selection, OCR control, multi-language support
-- **User Preferences**: Save and load extraction preferences
-- **Real-time Processing**: Live status updates during document processing
-- **Modern UI**: Clean, responsive web interface
+- **User Preferences**: Save and load extraction preferences with functional Save Configuration button
+- **Real-time Processing**: Live status updates during document processing using Server-Sent Events (SSE)
+- **Modern UI**: Clean, responsive web interface with proper format display
+- **GPU Acceleration**: Automatic detection and use of MPS (Metal Performance Shaders) on macOS
 
 ## 📋 Prerequisites
 
@@ -246,3 +247,38 @@ If you encounter any issues or have questions:
 
 **Minh Cao**  
 [![LinkedIn](https://img.shields.io/badge/LinkedIn-0077B5?style=for-the-badge&logo=linkedin&logoColor=white)](https://www.linkedin.com/in/minhc/)
+
+## 📝 Version History
+
+### Recent Fixes
+
+#### v1.2.1 (Latest)
+
+- **Fixed Output Format Bug**: Resolved issue where selecting Markdown or HTML format would incorrectly return JSON content
+  - Enhanced file selection logic to properly match output format with file extensions (.md, .html, .json)
+  - Added fallback mechanism when specific format files are not found
+  - Improved debug logging for better troubleshooting
+- **Restored Save Configuration**: Fixed the Save Configuration button functionality
+- **Enhanced SSE Processing**: Improved Server-Sent Events handling for real-time progress updates
+- **Better Error Handling**: Added comprehensive error messages and fallback options
+
+### v1.2.0
+
+- Enhanced LLM processing with improved model selection
+- Added support for Server-Sent Events (SSE) for real-time updates
+- Fixed issue with image extraction not serving images correctly
+- Improved user preferences saving and loading
+
+### v1.1.0
+
+- Fixed issue with Save Configuration button not saving preferences
+- Improved output format selection with proper format display
+- Added support for GPU acceleration using MPS on macOS
+- Updated dependencies to latest versions
+
+### v1.0.0
+
+- Initial release of the Marker Document Extractor
+- Supports PDF to JSON, Markdown, and HTML conversion
+- Includes LLM processing with Google Gemini and Ollama
+- Features a modern web interface with real-time processing updates

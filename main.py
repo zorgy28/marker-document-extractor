@@ -1,5 +1,5 @@
 from fastapi import FastAPI, File, UploadFile, Form
-from fastapi.responses import JSONResponse, FileResponse
+from fastapi.responses import JSONResponse, FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 import tempfile
 import os
@@ -8,6 +8,13 @@ import json
 import requests
 from dotenv import load_dotenv
 import torch  # Add torch import for MPS detection
+import asyncio
+from typing import AsyncGenerator
+import re
+import uuid
+import shutil
+from typing import Optional
+import time
 
 # Load environment variables from .env file
 load_dotenv()
@@ -43,7 +50,7 @@ def copy_extracted_images(source_dir: str, dest_dir: str):
     import glob
     
     # Find all image files in the source directory and subdirectories
-    image_patterns = ['*.jpg', '*.jpeg', '*.png', '*.gif', '*.bmp', '*.webp']
+    image_patterns = ['*.jpg', '*.jpeg', '*.png', '*.gif', '.bmp', '*.webp']
     
     for root, dirs, files in os.walk(source_dir):
         for pattern in image_patterns:
@@ -102,66 +109,54 @@ async def extract_document(
         output_dir = os.path.join(tmp_dir, "output")
         os.makedirs(output_dir, exist_ok=True)
         
-        # Build marker command with options
-        cmd = ["marker", tmp_dir, "--output_dir", output_dir, "--output_format", outputFormat]
+        # Prepare marker command with proper arguments
+        marker_cmd = [
+            "marker",
+            tmp_dir,  # Input folder (not individual file)
+            "--output_dir", tmp_dir,  # Output directory
+            "--output_format", outputFormat.lower(),
+            "--workers", str(workers),
+            "--debug"  # Enable debug mode for progress tracking
+        ]
         
-        if useLlm:
-            cmd.append("--use_llm")
-            
-            if llmService == "ollama":
-                # Configure Ollama (now supported in Marker 1.7.3+)
-                cmd.extend(["--ollama_base_url", ollamaBaseUrl])
-                cmd.extend(["--ollama_model", ollamaModel])
-                print(f"Using Ollama: {ollamaBaseUrl} with model {ollamaModel}")
-                
-                # Pre-load the model and set keep_alive to keep it in memory longer
-                try:
-                    preload_payload = {
-                        "model": ollamaModel,
-                        "prompt": ".",  # Minimal prompt to load the model
-                        "stream": False,
-                        "keep_alive": "2h"  # Keep model loaded for 2 hours after use
-                    }
-                    requests.post(f"{ollamaBaseUrl}/api/generate", 
-                                json=preload_payload, 
-                                timeout=10)
-                    print(f"Pre-loaded {ollamaModel} with 2-hour keep_alive")
-                except Exception as e:
-                    print(f"Warning: Could not pre-load model: {e}")
-            else:
-                # Use Gemini
-                api_key = googleApiKey or os.getenv("GOOGLE_API_KEY")
-                if api_key:
-                    cmd.extend(["--google_api_key", api_key])
-                    print(f"Using Google API key: {api_key[:10]}...")
-                else:
-                    print("Warning: LLM processing enabled but no API key provided")
-        
-        if not extractImages:
-            cmd.append("--disable_image_extraction")
-            
+        # Add page range if specified
         if pageRange:
-            cmd.extend(["--page_range", pageRange])
-            
-        if languages:
-            cmd.extend(["--languages", languages])
-            
-        if workers > 1:
-            cmd.extend(["--workers", str(workers)])
-            
-        if forceOcr:
-            cmd.append("--force_ocr")
-            
-        if stripExistingOcr:
-            cmd.append("--strip_existing_ocr")
-            
-        if paginateOutput:
-            cmd.append("--paginate_output")
-            
-        if debugMode:
-            cmd.append("--debug")
+            marker_cmd.extend(["--page_range", pageRange])
         
-        print(f"Running Marker CLI: {' '.join(cmd)}")
+        # Add image extraction flag
+        if not extractImages:
+            marker_cmd.append("--disable_image_extraction")
+        
+        # Add language override
+        if languages:
+            marker_cmd.extend(["--languages", languages])
+        
+        # Add force OCR option
+        if forceOcr:
+            marker_cmd.extend(["--force_ocr"])
+        
+        # Add strip existing OCR option  
+        if stripExistingOcr:
+            marker_cmd.extend(["--strip_existing_ocr"])
+        
+        # Add LLM service configuration if specified
+        if useLlm:
+            if llmService == "openai":
+                marker_cmd.extend(["--llm_service", "marker.services.openai.OpenAIService"])
+            elif llmService == "anthropic":
+                marker_cmd.extend(["--llm_service", "marker.services.anthropic.AnthropicService"])
+            elif llmService == "ollama":
+                marker_cmd.extend(["--llm_service", "marker.services.ollama.OllamaService"])
+                
+                # Add Ollama-specific configuration
+                if ollamaModel:
+                    marker_cmd.extend(["--ollama_model", ollamaModel])
+                
+                if ollamaBaseUrl:
+                    marker_cmd.extend(["--ollama_base_url", ollamaBaseUrl])
+        
+        print(f"[SSE] Marker command output format: --output_format {outputFormat.lower()}")
+        print(f"Running Marker CLI: {' '.join(marker_cmd)}")
         
         # Set timeout for LLM processing (longer timeout for Ollama)
         if useLlm and llmService == "ollama":
@@ -172,7 +167,7 @@ async def extract_document(
             timeout = 120  # 2 minutes for regular processing
         
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+            result = subprocess.run(marker_cmd, capture_output=True, text=True, timeout=timeout)
         except subprocess.TimeoutExpired:
             return JSONResponse(
                 status_code=500,
@@ -249,7 +244,6 @@ async def extract_document(
                                     extracted = json.load(out_f)
                                 else:
                                     content = out_f.read()
-                                    # Update image paths to point to our served images
                                     content = update_image_paths(content, session_id)
                                     extracted = {"content": content, "format": outputFormat, "session_id": session_id}
                             print(f"Successfully loaded output from: {file_path}")
@@ -384,3 +378,338 @@ async def save_preferences(preferences: dict):
             status_code=500,
             content={"error": f"Failed to save preferences: {str(e)}"}
         )
+
+class Extractor:
+    async def _send_heartbeats(self):
+        """Send periodic heartbeat messages to keep connection alive"""
+        while True:
+            await asyncio.sleep(5)  # Send heartbeat every 5 seconds
+            yield f"data: {json.dumps({'type': 'heartbeat'})}\n\n"
+
+    async def extract_with_progress(
+        self,
+        file: UploadFile = File(...),
+        outputFormat: str = Form("json"),
+        useLlm: bool = Form(False),
+        llmService: str = Form("gemini"),
+        googleApiKey: Optional[str] = Form(None),
+        ollamaBaseUrl: str = Form("http://localhost:11434"),
+        ollamaModel: str = Form("llama2"),
+        extractImages: bool = Form(True),
+        pageRange: Optional[str] = Form(None),
+        languages: Optional[str] = Form(None),
+        workers: int = Form(1),
+        forceOcr: bool = Form(False),
+        stripExistingOcr: bool = Form(False),
+        paginateOutput: bool = Form(False),
+        debugMode: bool = Form(False)
+    ):
+        """Extract document with real-time progress updates using SSE"""
+        
+        # Read file content before starting the async generator
+        file_content = await file.read()
+        input_filename = file.filename
+        
+        async def generate_progress():
+            temp_dir = None
+            session_id = str(int(time.time() * 1000))
+            session_images_dir = os.path.join("extracted_images", session_id)
+            
+            try:
+                # Log the received parameters
+                print(f"[SSE] Received outputFormat: {outputFormat}")
+                print(f"[SSE] Debug mode: {debugMode}")
+                
+                # Create temporary directory
+                temp_dir = tempfile.mkdtemp()
+                file_path = os.path.join(temp_dir, input_filename)
+                
+                with open(file_path, "wb") as f:
+                    f.write(file_content)
+                
+                print(f"[SSE] Starting extraction for file: {input_filename}")
+                
+                yield f"data: {json.dumps({'type': 'start', 'status': 'initializing', 'message': 'Starting extraction...', 'session_id': session_id})}\n\n"
+                await asyncio.sleep(0)
+                
+                # Load LLM model if needed
+                if llmService and not useLlm:
+                    load_status = await load_ollama_model(llmService)
+                    yield f"data: {json.dumps({'type': 'progress', 'status': 'model_loaded', 'message': f'Loaded {llmService} model', 'progress': 10})}\n\n"
+                    await asyncio.sleep(0)
+                
+                # Create output directory
+                output_dir = os.path.join(temp_dir, "output")
+                os.makedirs(output_dir, exist_ok=True)
+                
+                # Prepare marker command with proper arguments
+                marker_cmd = [
+                    "marker",
+                    temp_dir,  # Input folder (not individual file)
+                    "--output_dir", temp_dir,  # Output directory
+                    "--output_format", outputFormat.lower(),
+                    "--workers", str(workers),
+                    "--debug"  # Enable debug mode for progress tracking
+                ]
+                
+                # Add page range if specified
+                if pageRange:
+                    marker_cmd.extend(["--page_range", pageRange])
+                
+                # Add image extraction flag
+                if not extractImages:
+                    marker_cmd.append("--disable_image_extraction")
+                
+                # Add language override
+                if languages:
+                    marker_cmd.extend(["--languages", languages])
+                
+                # Add force OCR option
+                if forceOcr:
+                    marker_cmd.extend(["--force_ocr"])
+                
+                # Add strip existing OCR option  
+                if stripExistingOcr:
+                    marker_cmd.extend(["--strip_existing_ocr"])
+                
+                # Add LLM service configuration if specified
+                if useLlm:
+                    if llmService == "gemini":
+                        marker_cmd.extend(["--llm_service", "marker.services.google.GoogleService"])
+                        if googleApiKey:
+                            env["GOOGLE_API_KEY"] = googleApiKey
+                    elif llmService == "ollama":
+                        marker_cmd.extend(["--llm_service", "marker.services.ollama.OllamaService"])
+                        
+                        # Add Ollama-specific configuration
+                        if ollamaModel:
+                            marker_cmd.extend(["--ollama_model", ollamaModel])
+                        
+                        if ollamaBaseUrl:
+                            marker_cmd.extend(["--ollama_base_url", ollamaBaseUrl])
+                
+                print(f"[SSE] Marker command output format: --output_format {outputFormat.lower()}")
+                print(f"[SSE] Running command: {' '.join(marker_cmd)}")
+                
+                # Set timeout for LLM processing (longer timeout for Ollama)
+                if useLlm and llmService == "ollama":
+                    timeout = 600  # 10 minutes for Ollama (model loading + processing)
+                elif useLlm:
+                    timeout = 300  # 5 minutes for cloud LLMs
+                else:
+                    timeout = 120  # 2 minutes for regular processing
+                
+                # Run marker command as async subprocess
+                env = os.environ.copy()
+                env["PYTHONUNBUFFERED"] = "1"  # Force unbuffered output
+                
+                # Add Google API key to environment if provided
+                if useLlm and llmService == "gemini" and googleApiKey:
+                    env["GOOGLE_API_KEY"] = googleApiKey
+                
+                process = await asyncio.create_subprocess_exec(
+                    *marker_cmd,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    env=env
+                )
+                
+                yield f"data: {json.dumps({'type': 'progress', 'status': 'processing', 'message': 'Starting document processing...', 'progress': 15})}\n\n"
+                await asyncio.sleep(0)
+                
+                # Progress tracking variables
+                total_pages = None
+                current_page = 0
+                progress_base = 15
+                progress_range = 70
+                
+                async def read_stream_generator(stream, stream_name):
+                    nonlocal total_pages, current_page
+                    buffer = ""
+                    
+                    while True:
+                        chunk = await stream.read(1024)
+                        if not chunk:
+                            break
+                        
+                        text = chunk.decode('utf-8', errors='ignore')
+                        buffer += text
+                        lines = buffer.split('\n')
+                        buffer = lines[-1]  # Keep incomplete line in buffer
+                        
+                        for line in lines[:-1]:
+                            line = line.strip()
+                            if not line:
+                                continue
+                            
+                            print(f"[SSE] {stream_name}: {line}")  # Debug
+                            
+                            # Always send debug logs first if debug mode is enabled
+                            if debugMode:
+                                yield f"data: {json.dumps({'type': 'log', 'message': f'[{stream_name}] {line}'})}\n\n"
+                            
+                            # Parse different progress indicators
+                            if "Loading" in line and "model" in line:
+                                yield f"data: {json.dumps({'type': 'progress', 'status': 'loading_models', 'message': 'Loading AI models...', 'progress': 12})}\n\n"
+                            
+                            elif "Processing PDFs" in line:
+                                # Parse progress bar
+                                match = re.search(r'(\d+)%', line)
+                                if match:
+                                    percent = int(match.group(1))
+                                    progress = progress_base + int((percent / 100) * progress_range)
+                                    yield f"data: {json.dumps({'type': 'progress', 'status': 'processing', 'message': f'Processing document: {percent}%', 'progress': progress})}\n\n"
+                            
+                            elif re.search(r'Processing page (\d+)', line):
+                                match = re.search(r'Processing page (\d+)', line)
+                                if match:
+                                    current_page = int(match.group(1))
+                                    if total_pages:
+                                        progress = progress_base + int((current_page / total_pages) * progress_range)
+                                        yield f"data: {json.dumps({'type': 'progress', 'status': 'processing_page', 'message': f'Processing page {current_page} of {total_pages}', 'progress': progress, 'current_page': current_page, 'total_pages': total_pages})}\n\n"
+                            
+                            elif "Converting" in line and "pdfs" in line:
+                                yield f"data: {json.dumps({'type': 'progress', 'status': 'converting', 'message': 'Converting document...', 'progress': 10})}\n\n"
+                            
+                            elif "Dumped" in line and ("layout" in line or "PDF" in line):
+                                yield f"data: {json.dumps({'type': 'progress', 'status': 'analyzing', 'message': 'Analyzing document structure...', 'progress': 30})}\n\n"
+                            
+                            elif "OCR" in line:
+                                yield f"data: {json.dumps({'type': 'progress', 'status': 'ocr', 'message': 'Running OCR on images...', 'progress': 20})}\n\n"
+                            
+                            elif "Layout" in line or "detection" in line:
+                                yield f"data: {json.dumps({'type': 'progress', 'status': 'layout_detection', 'message': 'Analyzing document layout...', 'progress': 25})}\n\n"
+                            
+                            elif "LLM" in line or "Gemini" in line or "Ollama" in line:
+                                yield f"data: {json.dumps({'type': 'progress', 'status': 'llm_processing', 'message': 'Enhancing with AI...', 'progress': 87})}\n\n"
+                            
+                            elif "Writing" in line or "Saving" in line:
+                                yield f"data: {json.dumps({'type': 'progress', 'status': 'saving', 'message': 'Saving results...', 'progress': 92})}\n\n"
+                    
+                    # Process any remaining data in buffer
+                    if buffer.strip():
+                        print(f"[SSE] {stream_name} (final): {buffer.strip()}")
+                
+                # Read streams concurrently
+                async def monitor_process():
+                    error_messages = []
+                    
+                    # Read both stdout and stderr
+                    async for output in read_stream_generator(process.stdout, "STDOUT"):
+                        yield output
+                    
+                    async for output in read_stream_generator(process.stderr, "STDERR"):
+                        # Capture error messages from stderr
+                        if '"type": "log"' in output:
+                            error_messages.append(output)
+                        yield output
+                    
+                    # Wait for process completion
+                    return_code = await process.wait()
+                    print(f"[SSE] Process completed with return code: {return_code}")
+                    
+                    if return_code != 0:
+                        error_msg = "Extraction failed."
+                        if error_messages:
+                            # Extract actual error messages from captured output
+                            error_msg += " " + " ".join(error_messages[-5:])  # Last 5 error messages
+                        yield f"data: {json.dumps({'type': 'error', 'status': 'failed', 'message': error_msg})}\n\n"
+                        yield {"return_code": return_code}  # Signal failure
+                        return
+                    
+                    yield f"data: {json.dumps({'type': 'progress', 'status': 'finalizing', 'message': 'Processing output...', 'progress': 95})}\n\n"
+                    await asyncio.sleep(0)
+                    yield {"return_code": return_code}  # Signal success
+                    
+                # Run the process and monitor output
+                process_return_code = None
+                
+                async for output in monitor_process():
+                    if isinstance(output, dict) and "return_code" in output:
+                        process_return_code = output["return_code"]
+                    elif isinstance(output, str):
+                        yield output
+                
+                # Only proceed if extraction was successful
+                if process_return_code != 0:
+                    return
+                
+                # Create session directory for images
+                session_images_dir = os.path.join("extracted_images", session_id)
+                os.makedirs(session_images_dir, exist_ok=True)
+                
+                # Find the output file - Marker saves it in subdirectories
+                output_files = []
+                print(f"[SSE] All files in temp directory: {os.listdir(temp_dir)}")
+                print(f"[SSE] Looking for output format: {outputFormat}")
+                
+                # Determine the expected file extension based on format
+                if outputFormat.lower() == 'markdown':
+                    expected_extension = '.md'
+                elif outputFormat.lower() == 'html':
+                    expected_extension = '.html'
+                else:
+                    expected_extension = '.json'
+                
+                # Look for the output file in the temp directory and subdirectories
+                for root, dirs, files in os.walk(temp_dir):
+                    for file in files:
+                        file_path = os.path.join(root, file)
+                        # Look for files with the expected extension
+                        if file.endswith(expected_extension) and not file.endswith('config.json') and not file.endswith('.pdf'):
+                            output_files.append(file_path)
+                            print(f"[SSE] Found output file: {file_path}")
+                
+                if not output_files:
+                    # Fallback: look for any markdown, json, or html file
+                    print(f"[SSE] No {expected_extension} files found, looking for any output file")
+                    for root, dirs, files in os.walk(temp_dir):
+                        for file in files:
+                            file_path = os.path.join(root, file)
+                            if file.endswith(('.md', '.json', '.html')) and not file.endswith('config.json') and not file.endswith('.pdf'):
+                                output_files.append(file_path)
+                                print(f"[SSE] Found fallback output file: {file_path}")
+                
+                if not output_files:
+                    yield f"data: {json.dumps({'type': 'error', 'status': 'failed', 'message': 'No output file generated by Marker'})}\n\n"
+                    return
+                
+                # Use the first output file found
+                output_file = output_files[0]
+                print(f"[SSE] Using output file: {output_file}")
+                
+                # Read the output file
+                with open(output_file, 'r', encoding='utf-8') as f:
+                    content = f.read()
+                
+                # Update image paths to point to our served images
+                content = update_image_paths(content, session_id)
+                
+                # Copy extracted images
+                copy_extracted_images(temp_dir, session_images_dir)
+                
+                yield f"data: {json.dumps({'type': 'progress', 'status': 'complete', 'message': 'Extraction complete!', 'progress': 100})}\n\n"
+                await asyncio.sleep(0)
+                
+                # Send final result
+                yield f"data: {json.dumps({'type': 'result', 'status': 'success', 'data': {'content': content, 'format': outputFormat, 'session_id': session_id}, 'session_id': session_id})}\n\n"
+                    
+            except Exception as e:
+                print(f"[SSE] Fatal error in generate_progress: {e}")
+                import traceback
+                traceback.print_exc()
+                yield f"data: {json.dumps({'type': 'error', 'status': 'failed', 'message': f'Server error: {str(e)}'})}\n\n"
+        
+        return StreamingResponse(
+            generate_progress(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",  # Disable proxy buffering
+                "Content-Type": "text/event-stream"
+            }
+        )
+
+extractor = Extractor()
+app.post("/extract-progress")(extractor.extract_with_progress)
