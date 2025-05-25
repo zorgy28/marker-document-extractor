@@ -21,8 +21,9 @@ def update_image_paths(content: str, session_id: str) -> str:
     """Update image paths in HTML/Markdown to point to our served images"""
     import re
     
-    # Pattern to match image references like _page_0_Picture_16.jpeg
-    image_pattern = r'(_page_\d+_Picture_\d+\.\w+)'
+    # Pattern to match various image references from Marker:
+    # _page_X_Picture_Y.ext, _page_X_Figure_Y.ext, or any _page_X_*.ext pattern
+    image_pattern = r'(_page_\d+_[A-Za-z]+_\d+\.\w+)'
     
     def replace_path(match):
         image_name = match.group(1)
