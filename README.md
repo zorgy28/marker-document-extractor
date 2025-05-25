@@ -2,6 +2,12 @@
 
 A web-based document extraction tool that converts PDF documents to structured formats (JSON, Markdown, HTML) using the powerful [Marker](https://github.com/VikParuchuri/marker) library. The application features a modern web interface with support for LLM-enhanced processing via Google Gemini or local Ollama models.
 
+## 📸 Screenshot
+
+![Marker Document Extractor Interface](screenshot.png)
+
+*The clean, modern web interface with comprehensive extraction options*
+
 ## 🚀 Features
 
 - **Multiple Output Formats**: Convert PDFs to JSON, Markdown, or HTML
@@ -235,3 +241,8 @@ If you encounter any issues or have questions:
 ---
 
 **Note**: This application requires the Marker library to be properly installed and configured. Please follow the [official Marker installation guide](https://github.com/VikParuchuri/marker#installation) for your specific system.
+
+## 👨‍💻 Author
+
+**Minh Cao**  
+[![LinkedIn](https://img.shields.io/badge/LinkedIn-0077B5?style=for-the-badge&logo=linkedin&logoColor=white)](https://www.linkedin.com/in/minhc/)

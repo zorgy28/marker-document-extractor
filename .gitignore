@@ -58,3 +58,6 @@ Thumbs.db
 # Marker temporary files
 marker_output/
 *.marker/
+
+# Screenshots and documentation images are allowed
+# screenshot.png should be included
