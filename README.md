@@ -32,7 +32,7 @@ Before installing, ensure you have:
 ### 1. Clone the Repository
 
 ```bash
-git clone https://github.com/yourusername/marker-document-extractor.git
+git clone https://github.com/zorgy28/marker-document-extractor.git
 cd marker-document-extractor
 ```
 
