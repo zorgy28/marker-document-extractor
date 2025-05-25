@@ -5,10 +5,9 @@ import tempfile
 import os
 import subprocess
 import json
-import shutil
-import uuid
 import requests
 from dotenv import load_dotenv
+import torch  # Add torch import for MPS detection
 
 # Load environment variables from .env file
 load_dotenv()
@@ -16,6 +15,14 @@ load_dotenv()
 # Set Ollama environment variables for better performance
 os.environ.setdefault("OLLAMA_KEEP_ALIVE", "2h")  # Default keep_alive time
 os.environ.setdefault("OLLAMA_MAX_LOADED_MODELS", "1")  # Limit memory usage
+
+# Check for MPS availability at startup
+if torch.backends.mps.is_available():
+    print(" GPU Acceleration: MPS (Metal Performance Shaders) is available!")
+    print(f"   PyTorch version: {torch.__version__}")
+    print("   Marker will use your M3 Max GPU for faster processing")
+else:
+    print(" MPS not available - Marker will use CPU")
 
 def update_image_paths(content: str, session_id: str) -> str:
     """Update image paths in HTML/Markdown to point to our served images"""
