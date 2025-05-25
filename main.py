@@ -143,13 +143,13 @@ async def extract_document(
             cmd.extend(["--workers", str(workers)])
             
         if forceOcr:
-            cmd.extend(["--PdfProvider_force_ocr", "True"])
+            cmd.append("--force_ocr")
             
         if stripExistingOcr:
-            cmd.extend(["--PdfProvider_strip_existing_ocr", "True"])
+            cmd.append("--strip_existing_ocr")
             
         if paginateOutput:
-            cmd.extend(["--paginate_output", "True"])
+            cmd.append("--paginate_output")
             
         if debugMode:
             cmd.append("--debug")
