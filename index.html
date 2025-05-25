@@ -271,7 +271,22 @@
         <h2>Marker Document Extractor</h2>
         <form id="uploadForm">
             <label for="file">Select a document to extract:</label>
-            <input type="file" id="file" name="file" accept=".pdf" required />
+            <input type="file" id="file" name="file" accept=".pdf,.png,.jpg,.jpeg,.gif,.bmp,.tiff,.pptx,.docx,.xlsx,.html,.htm,.epub" required />
+            <small style="display: block; margin-top: 5px; color: #666;">Supported formats: PDF, Images (PNG, JPG, GIF, BMP, TIFF), PPTX, DOCX, XLSX, HTML, EPUB</small>
+            
+            <div class="info-box" style="margin-top: 15px; padding: 10px; background-color: #f0f8ff; border-left: 4px solid #3498db; border-radius: 4px;">
+                <h4 style="margin: 0 0 5px 0; color: #2c3e50;">📄 Supported File Types</h4>
+                <ul style="margin: 5px 0; padding-left: 20px; color: #555;">
+                    <li><strong>PDF Documents</strong> - Standard PDFs, scanned documents, forms</li>
+                    <li><strong>Images</strong> - PNG, JPG/JPEG, GIF, BMP, TIFF (with OCR support)</li>
+                    <li><strong>Microsoft Office</strong> - Word (DOCX), PowerPoint (PPTX), Excel (XLSX)</li>
+                    <li><strong>Web Documents</strong> - HTML files with embedded styles and images</li>
+                    <li><strong>E-books</strong> - EPUB format with chapter preservation</li>
+                </ul>
+                <p style="margin: 5px 0 0 0; font-size: 0.9em; color: #666;">
+                    💡 <strong>Tip:</strong> For best results with scanned documents or images, ensure they have good quality and proper orientation.
+                </p>
+            </div>
             
             <div class="section">
                 <h3>Output Settings</h3>
@@ -336,6 +351,9 @@
                 <h3>Processing Options</h3>
                 <label for="pageRange">Page Range (optional):</label>
                 <input type="text" id="pageRange" name="pageRange" placeholder="e.g., 0,5-10,20" />
+                <small style="display: block; margin-top: 5px; color: #666;">
+                    Note: Page ranges apply to multi-page documents (PDF, PPTX, DOCX, EPUB). Single images are processed as one page.
+                </small>
                 
                 <label for="languages">OCR Languages (optional):</label>
                 <input type="text" id="languages" name="languages" placeholder="e.g., en,fr,de" />

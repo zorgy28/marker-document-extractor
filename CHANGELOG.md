@@ -5,6 +5,28 @@ All notable changes to the Marker Document Extractor project will be documented 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] - 2025-01-25
+
+### Added
+- **Universal File Format Support**: Extended support to all Marker-compatible file formats
+  - Images: PNG, JPG/JPEG, GIF, BMP, TIFF (with OCR support)
+  - Microsoft Office: Word (DOCX), PowerPoint (PPTX), Excel (XLSX)
+  - Web Documents: HTML files with embedded styles
+  - E-books: EPUB format with chapter preservation
+- **Enhanced UI Instructions**: Added detailed file type information box with tips for users
+- **File Type Specific Notes**: Added contextual help for page ranges and processing options
+
+### Changed
+- Updated file input accept attribute to include all supported formats
+- Modified backend file filtering to exclude all source document types (not just PDFs)
+- Made progress messages more generic to work with all document types
+- Updated documentation to reflect universal file format support
+
+### Technical Details
+- File input accept attribute now includes: .pdf,.png,.jpg,.jpeg,.gif,.bmp,.tiff,.pptx,.docx,.xlsx,.html,.htm,.epub
+- Backend excludes source files with extensions: .pdf, .png, .jpg, .jpeg, .gif, .bmp, .tiff, .pptx, .docx, .xlsx, .epub
+- Progress tracking adapted to handle various document types seamlessly
+
 ## [1.2.1] - 2025-01-25
 
 ### Fixed

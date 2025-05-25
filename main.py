@@ -552,13 +552,11 @@ class Extractor:
                             if "Loading" in line and "model" in line:
                                 yield f"data: {json.dumps({'type': 'progress', 'status': 'loading_models', 'message': 'Loading AI models...', 'progress': 12})}\n\n"
                             
-                            elif "Processing PDFs" in line:
-                                # Parse progress bar
-                                match = re.search(r'(\d+)%', line)
-                                if match:
-                                    percent = int(match.group(1))
-                                    progress = progress_base + int((percent / 100) * progress_range)
-                                    yield f"data: {json.dumps({'type': 'progress', 'status': 'processing', 'message': f'Processing document: {percent}%', 'progress': progress})}\n\n"
+                            elif "Converting" in line:
+                                yield f"data: {json.dumps({'type': 'progress', 'status': 'converting', 'message': 'Converting document...', 'progress': 10})}\n\n"
+                            
+                            elif "Dumped" in line and ("layout" in line or "PDF" in line or "document" in line):
+                                yield f"data: {json.dumps({'type': 'progress', 'status': 'analyzing', 'message': 'Analyzing document structure...', 'progress': 30})}\n\n"
                             
                             elif re.search(r'Processing page (\d+)', line):
                                 match = re.search(r'Processing page (\d+)', line)
@@ -567,12 +565,6 @@ class Extractor:
                                     if total_pages:
                                         progress = progress_base + int((current_page / total_pages) * progress_range)
                                         yield f"data: {json.dumps({'type': 'progress', 'status': 'processing_page', 'message': f'Processing page {current_page} of {total_pages}', 'progress': progress, 'current_page': current_page, 'total_pages': total_pages})}\n\n"
-                            
-                            elif "Converting" in line and "pdfs" in line:
-                                yield f"data: {json.dumps({'type': 'progress', 'status': 'converting', 'message': 'Converting document...', 'progress': 10})}\n\n"
-                            
-                            elif "Dumped" in line and ("layout" in line or "PDF" in line):
-                                yield f"data: {json.dumps({'type': 'progress', 'status': 'analyzing', 'message': 'Analyzing document structure...', 'progress': 30})}\n\n"
                             
                             elif "OCR" in line:
                                 yield f"data: {json.dumps({'type': 'progress', 'status': 'ocr', 'message': 'Running OCR on images...', 'progress': 20})}\n\n"
@@ -651,12 +643,15 @@ class Extractor:
                 else:
                     expected_extension = '.json'
                 
-                # Look for the output file in the temp directory and subdirectories
+                # Define source document extensions to exclude
+                source_extensions = ('.pdf', '.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tiff', '.pptx', '.docx', '.xlsx', '.epub')
+                
+                # Look for files with the expected extension
                 for root, dirs, files in os.walk(temp_dir):
                     for file in files:
                         file_path = os.path.join(root, file)
                         # Look for files with the expected extension
-                        if file.endswith(expected_extension) and not file.endswith('config.json') and not file.endswith('.pdf'):
+                        if file.endswith(expected_extension) and not file.endswith('config.json') and not file.lower().endswith(source_extensions):
                             output_files.append(file_path)
                             print(f"[SSE] Found output file: {file_path}")
                 
@@ -666,7 +661,7 @@ class Extractor:
                     for root, dirs, files in os.walk(temp_dir):
                         for file in files:
                             file_path = os.path.join(root, file)
-                            if file.endswith(('.md', '.json', '.html')) and not file.endswith('config.json') and not file.endswith('.pdf'):
+                            if file.endswith(('.md', '.json', '.html')) and not file.endswith('config.json') and not file.lower().endswith(source_extensions):
                                 output_files.append(file_path)
                                 print(f"[SSE] Found fallback output file: {file_path}")
                 

@@ -1,6 +1,6 @@
 # Marker Document Extractor
 
-A web-based document extraction tool that converts PDF documents to structured formats (JSON, Markdown, HTML) using the powerful [Marker](https://github.com/VikParuchuri/marker) library. The application features a modern web interface with support for LLM-enhanced processing via Google Gemini or local Ollama models.
+A web-based document extraction tool that converts various document formats (PDF, Images, PPTX, DOCX, XLSX, HTML, EPUB) to structured formats (JSON, Markdown, HTML) using the powerful [Marker](https://github.com/VikParuchuri/marker) library. The application features a modern web interface with support for LLM-enhanced processing via Google Gemini or local Ollama models.
 
 ## 📸 Screenshot
 
@@ -10,7 +10,8 @@ A web-based document extraction tool that converts PDF documents to structured f
 
 ## 🚀 Features
 
-- **Multiple Output Formats**: Convert PDFs to JSON, Markdown, or HTML with proper format selection
+- **Universal Document Support**: Convert PDF, Images (PNG, JPG, GIF, BMP, TIFF), PowerPoint (PPTX), Word (DOCX), Excel (XLSX), HTML, and EPUB files
+- **Multiple Output Formats**: Convert documents to JSON, Markdown, or HTML with proper format selection
 - **LLM Processing**: Enhanced extraction using Google Gemini or local Ollama models
 - **Image Extraction**: Automatically extract and serve images from documents
 - **Advanced Options**: Page range selection, OCR control, multi-language support
@@ -105,7 +106,12 @@ The application will start on `http://localhost:8000`
 
 ### Using the Web Interface
 
-1. **Upload Document**: Select a PDF file to extract
+1. **Upload Document**: Select any supported file to extract:
+   - PDF documents
+   - Images (PNG, JPG, GIF, BMP, TIFF)
+   - Microsoft Office files (DOCX, PPTX, XLSX)
+   - HTML files
+   - EPUB ebooks
 2. **Choose Output Format**: JSON, Markdown, or HTML
 3. **Configure LLM** (optional):
    - Select Google Gemini or Ollama
@@ -113,7 +119,7 @@ The application will start on `http://localhost:8000`
    - For Gemini: Provide your API key
 4. **Set Advanced Options**:
    - Extract images
-   - Page range selection
+   - Page range selection (for multi-page documents)
    - Language specification
    - Worker count for parallel processing
 5. **Extract**: Click the Extract button to process your document
@@ -252,7 +258,17 @@ If you encounter any issues or have questions:
 
 ### Recent Fixes
 
-#### v1.2.1 (Latest)
+#### v1.3.0 (Latest)
+
+- **Universal File Format Support**: Extended support beyond PDFs to all Marker-compatible formats
+  - Images: PNG, JPG/JPEG, GIF, BMP, TIFF with OCR support
+  - Microsoft Office: DOCX, PPTX, XLSX files
+  - Web Documents: HTML files
+  - E-books: EPUB format
+- **Enhanced UI**: Added detailed file type information and contextual help
+- **Improved Processing**: Generic progress messages for all document types
+
+#### v1.2.1
 
 - **Fixed Output Format Bug**: Resolved issue where selecting Markdown or HTML format would incorrectly return JSON content
   - Enhanced file selection logic to properly match output format with file extensions (.md, .html, .json)
