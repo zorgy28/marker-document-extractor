@@ -1,67 +1,35 @@
 # Marker Document Extractor
 
-A web-based document extraction tool that converts various document formats (PDF, Images, PPTX, DOCX, XLSX, HTML, EPUB) to structured formats (JSON, Markdown, HTML) using the powerful [Marker](https://github.com/VikParuchuri/marker) library. The application features a modern web interface with support for LLM-enhanced processing via Google Gemini or local Ollama models.
-
-## 📸 Screenshot
-
-![Marker Document Extractor Interface](screenshot.png)
-
-*The clean, modern web interface with comprehensive extraction options*
+A web-based document extraction tool that converts documents (PDF, images, PPTX, DOCX, XLSX, HTML, EPUB) to structured formats (JSON, Markdown, HTML) using the [Marker](https://github.com/VikParuchuri/marker) library. Features a modern web UI, LLM-powered extraction (Google Gemini or local Ollama), GPU acceleration, and user preference management.
 
 ## 🚀 Features
 
-- **Universal Document Support**: Convert PDF, Images (PNG, JPG, GIF, BMP, TIFF), PowerPoint (PPTX), Word (DOCX), Excel (XLSX), HTML, and EPUB files
-- **Multiple Output Formats**: Convert documents to JSON, Markdown, or HTML with proper format selection
-- **LLM Processing**: Enhanced extraction using Google Gemini or local Ollama models
-- **Image Extraction**: Automatically extract and serve images from documents
-- **Advanced Options**: Page range selection, OCR control, multi-language support
-- **User Preferences**: Save and load extraction preferences with functional Save Configuration button
-- **Real-time Processing**: Live status updates during document processing using Server-Sent Events (SSE)
-- **Modern UI**: Clean, responsive web interface with proper format display
-- **GPU Acceleration**: Automatic detection and use of MPS (Metal Performance Shaders) on macOS
+- **Universal Document Support**: Extract from PDF, images (PNG, JPG, GIF, BMP, TIFF, WebP, ICO, HEIC, HEIF), PPTX, DOCX, XLSX, HTML, EPUB
+- **Multiple Output Formats**: JSON, Markdown, or HTML
+- **LLM Integration**: Use Google Gemini (API key required) or local Ollama (with custom model selection)
+- **GPU Acceleration**: Auto-detects and uses MPS (Metal Performance Shaders) on macOS for faster processing
+- **User Preferences**: Save/load extraction settings in the UI
+- **Image Extraction**: Automatically extracts and serves images from documents
+- **Advanced Options**: Page range, OCR, multi-language, workers, debug mode
+- **Real-time Processing**: Live status/progress updates via Server-Sent Events (SSE)
+- **Modern UI**: Responsive, clean interface with enhanced result display
+
+## 🖥️ Screenshot
+
+![Marker Document Extractor Interface](screenshot.png)
+
+*Modern web interface with comprehensive extraction options*
 
 ## 📋 Prerequisites
 
-Before installing, ensure you have:
+- Python 3.8+
+- [Marker](https://github.com/VikParuchuri/marker) (installed via requirements.txt)
+- (Optional) [Ollama](https://ollama.ai/) for local LLM
+- (Optional) Google API key for Gemini
 
-- Python 3.8 or higher
-- [Marker](https://github.com/VikParuchuri/marker) library installed
-- (Optional) [Ollama](https://ollama.ai/) for local LLM processing
-- (Optional) Google API key for Gemini processing
+## ⚙️ Installation
 
-## 🛠️ Installation
-
-### 1. Clone the Repository
-
-```bash
-git clone https://github.com/zorgy28/marker-document-extractor.git
-cd marker-document-extractor
-```
-
-### 2. Create Virtual Environment
-
-```bash
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-```
-
-### 3. Install Dependencies
-
-```bash
-pip install -r requirements.txt
-```
-
-This will automatically install `marker-pdf[full]` which includes all dependencies for:
-- **PDF processing**: Built-in support
-- **Document conversion**: `mammoth` for DOCX, `weasyprint` for HTML rendering
-- **Spreadsheets**: `openpyxl` for Excel files
-- **Presentations**: `python-pptx` for PowerPoint files
-- **E-books**: `ebooklib` for EPUB files
-- **Images**: Built-in support via Pillow and OCR
-
-### 4. Configure Environment
-
-Create a `.env` file in the project root:
+1. **Clone the Repository**
 
 ```bash
 cp .env.example .env
