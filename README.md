@@ -51,20 +51,15 @@ source venv/bin/activate  # On Windows: venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-### 4. Install Marker
+This will automatically install `marker-pdf[full]` which includes all dependencies for:
+- **PDF processing**: Built-in support
+- **Document conversion**: `mammoth` for DOCX, `weasyprint` for HTML rendering
+- **Spreadsheets**: `openpyxl` for Excel files
+- **Presentations**: `python-pptx` for PowerPoint files
+- **E-books**: `ebooklib` for EPUB files
+- **Images**: Built-in support via Pillow and OCR
 
-Follow the official [Marker installation guide](https://github.com/VikParuchuri/marker#installation):
-
-```bash
-pip install marker-pdf
-```
-
-For GPU acceleration (recommended):
-```bash
-pip install marker-pdf[torch]
-```
-
-### 5. Configure Environment Variables
+### 4. Configure Environment
 
 Create a `.env` file in the project root:
 
@@ -80,7 +75,7 @@ Edit `.env` and add your API keys:
 GOOGLE_API_KEY=your_google_api_key_here
 ```
 
-### 6. (Optional) Install and Configure Ollama
+### 5. (Optional) Install and Configure Ollama
 
 For local LLM processing:
 
@@ -96,13 +91,14 @@ For local LLM processing:
 
 ## 🚀 Usage
 
-### Starting the Application
+### 1. Starting the Application
 
+Run the server:
 ```bash
 python main.py
 ```
 
-The application will start on `http://localhost:8000`
+The application will be available at `http://localhost:8000`
 
 ### Using the Web Interface
 

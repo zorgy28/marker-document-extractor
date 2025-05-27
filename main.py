@@ -106,6 +106,7 @@ async def extract_document(
         # List contents of temp directory before running Marker
         print(f"Temp directory contents before Marker: {os.listdir(tmp_dir)}")
 
+        # Create output directory
         output_dir = os.path.join(tmp_dir, "output")
         os.makedirs(output_dir, exist_ok=True)
         
@@ -113,7 +114,7 @@ async def extract_document(
         marker_cmd = [
             "marker",
             tmp_dir,  # Input folder (not individual file)
-            "--output_dir", tmp_dir,  # Output directory
+            "--output_dir", output_dir,  # Output directory (different from input)
             "--output_format", outputFormat.lower(),
             "--workers", str(workers),
             "--debug"  # Enable debug mode for progress tracking
@@ -185,9 +186,32 @@ async def extract_document(
             print(f"Marker CLI stderr: {result.stderr}")
 
         if result.returncode != 0:
+            # Try to get more specific error information
+            error_msg = "Marker conversion failed"
+            
+            # Check for common dependency errors
+            stderr_output = ""
+            if result.stderr:
+                stderr_output = result.stderr
+                if "weasyprint" in stderr_output.lower():
+                    error_msg = "Missing dependency: weasyprint is required for DOCX conversion. Run: pip install weasyprint"
+                elif "mammoth" in stderr_output.lower():
+                    error_msg = "Missing dependency: mammoth is required for DOCX conversion. Run: pip install mammoth"
+                elif "openpyxl" in stderr_output.lower():
+                    error_msg = "Missing dependency: openpyxl is required for Excel conversion. Run: pip install openpyxl"
+                elif "python-pptx" in stderr_output.lower():
+                    error_msg = "Missing dependency: python-pptx is required for PowerPoint conversion. Run: pip install python-pptx"
+                elif "ebooklib" in stderr_output.lower():
+                    error_msg = "Missing dependency: ebooklib is required for EPUB conversion. Run: pip install ebooklib"
+                elif stderr_output:
+                    # Include part of the actual error
+                    error_lines = stderr_output.strip().split('\n')
+                    if error_lines:
+                        error_msg = f"Marker error: {error_lines[-1][:200]}"
+            
             return JSONResponse(
                 status_code=500,
-                content={"error": result.stderr}
+                content={"error": error_msg}
             )
 
         # Generate unique session ID for this extraction
@@ -444,9 +468,8 @@ class Extractor:
                 
                 # Prepare marker command with proper arguments
                 marker_cmd = [
-                    "marker",
                     temp_dir,  # Input folder (not individual file)
-                    "--output_dir", temp_dir,  # Output directory
+                    "--output_dir", output_dir,  # Output directory (different from input)
                     "--output_format", outputFormat.lower(),
                     "--workers", str(workers),
                     "--debug"  # Enable debug mode for progress tracking
@@ -489,7 +512,23 @@ class Extractor:
                             marker_cmd.extend(["--ollama_base_url", ollamaBaseUrl])
                 
                 print(f"[SSE] Marker command output format: --output_format {outputFormat.lower()}")
+                # Remove all single and double quotes from marker_cmd arguments
+                # Ensure marker_cmd is constructed with plain strings only
+                print(f"[SSE] marker_cmd list (PLAIN): {marker_cmd}")
+                # Check for empty or None arguments
+                for idx, arg in enumerate(marker_cmd):
+                    if arg is None or (isinstance(arg, str) and arg.strip() == ""):
+                        error_msg = f"Invalid argument in marker_cmd at position {idx}: {repr(arg)}\nFull marker_cmd: {[repr(a) for a in marker_cmd]}"
+                        print(f"[SSE] {error_msg}")
+                        yield f"data: {json.dumps({'type': 'error', 'status': 'failed', 'message': error_msg})}\n\n"
+                        return
                 print(f"[SSE] Running command: {' '.join(marker_cmd)}")
+                # Validate input and output directories are not the same
+                if os.path.abspath(temp_dir) == os.path.abspath(output_dir):
+                    error_msg = f"Input and output directories are the same! This will cause marker CLI to fail.\nInput: {temp_dir}\nOutput: {output_dir}"
+                    print(f"[SSE] {error_msg}")
+                    yield f"data: {json.dumps({'type': 'error', 'status': 'failed', 'message': error_msg})}\n\n"
+                    return
                 
                 # Set timeout for LLM processing (longer timeout for Ollama)
                 if useLlm and llmService == "ollama":
@@ -499,19 +538,13 @@ class Extractor:
                 else:
                     timeout = 120  # 2 minutes for regular processing
                 
-                # Run marker command as async subprocess
-                env = os.environ.copy()
-                env["PYTHONUNBUFFERED"] = "1"  # Force unbuffered output
-                
-                # Add Google API key to environment if provided
-                if useLlm and llmService == "gemini" and googleApiKey:
-                    env["GOOGLE_API_KEY"] = googleApiKey
-                
+                # Execute Marker command
                 process = await asyncio.create_subprocess_exec(
+                    'marker',
                     *marker_cmd,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
-                    env=env
+                    env={**os.environ, 'PYTHONUNBUFFERED': '1'}
                 )
                 
                 yield f"data: {json.dumps({'type': 'progress', 'status': 'processing', 'message': 'Starting document processing...', 'progress': 15})}\n\n"
@@ -520,8 +553,6 @@ class Extractor:
                 # Progress tracking variables
                 total_pages = None
                 current_page = 0
-                progress_base = 15
-                progress_range = 70
                 
                 async def read_stream_generator(stream, stream_name):
                     nonlocal total_pages, current_page
@@ -546,9 +577,9 @@ class Extractor:
                             
                             # Always send debug logs first if debug mode is enabled
                             if debugMode:
-                                yield f"data: {json.dumps({'type': 'log', 'message': f'[{stream_name}] {line}'})}\n\n"
+                                yield f"data: {json.dumps({'type': 'debug', 'message': f'[{stream_name}] {line}'})}\n\n"
                             
-                            # Parse different progress indicators
+                            # Update progress based on output
                             if "Loading" in line and "model" in line:
                                 yield f"data: {json.dumps({'type': 'progress', 'status': 'loading_models', 'message': 'Loading AI models...', 'progress': 12})}\n\n"
                             
@@ -563,8 +594,19 @@ class Extractor:
                                 if match:
                                     current_page = int(match.group(1))
                                     if total_pages:
-                                        progress = progress_base + int((current_page / total_pages) * progress_range)
+                                        progress = 30 + int((current_page / total_pages) * 55)
                                         yield f"data: {json.dumps({'type': 'progress', 'status': 'processing_page', 'message': f'Processing page {current_page} of {total_pages}', 'progress': progress, 'current_page': current_page, 'total_pages': total_pages})}\n\n"
+                            
+                            elif "Page" in line and "/" in line:
+                                # Extract page numbers  
+                                page_match = re.search(r'Page (\d+)/(\d+)', line)
+                                if page_match:
+                                    current_page = int(page_match.group(1))
+                                    total_pages = int(page_match.group(2))
+                                    
+                                    # Calculate progress (30-85%)
+                                    page_progress = 30 + int((current_page / total_pages) * 55)
+                                    yield f"data: {json.dumps({'type': 'progress', 'status': 'processing', 'message': f'Processing page {current_page} of {total_pages}', 'progress': page_progress, 'current_page': current_page, 'total_pages': total_pages})}\n\n"
                             
                             elif "OCR" in line:
                                 yield f"data: {json.dumps({'type': 'progress', 'status': 'ocr', 'message': 'Running OCR on images...', 'progress': 20})}\n\n"
@@ -585,26 +627,48 @@ class Extractor:
                 # Read streams concurrently
                 async def monitor_process():
                     error_messages = []
+                    captured_stderr = []
                     
-                    # Read both stdout and stderr
                     async for output in read_stream_generator(process.stdout, "STDOUT"):
                         yield output
                     
                     async for output in read_stream_generator(process.stderr, "STDERR"):
                         # Capture error messages from stderr
-                        if '"type": "log"' in output:
-                            error_messages.append(output)
+                        if '"type": "debug"' in output:
+                            try:
+                                # Extract the actual message from debug output
+                                data = json.loads(output.split("data: ")[1].strip())
+                                if "[STDERR]" in data.get("message", ""):
+                                    captured_stderr.append(data["message"].replace("[STDERR] ", ""))
+                            except:
+                                pass
+                        error_messages.append(output)
                         yield output
                     
-                    # Wait for process completion
                     return_code = await process.wait()
                     print(f"[SSE] Process completed with return code: {return_code}")
                     
                     if return_code != 0:
-                        error_msg = "Extraction failed."
-                        if error_messages:
-                            # Extract actual error messages from captured output
-                            error_msg += " " + " ".join(error_messages[-5:])  # Last 5 error messages
+                        error_msg = "Marker conversion failed"
+                        
+                        # Check for common dependency errors in captured stderr
+                        stderr_text = "\n".join(captured_stderr)
+                        
+                        if "weasyprint" in stderr_text.lower():
+                            error_msg = "Missing dependency: weasyprint is required for DOCX conversion. Please reinstall with: pip install marker-pdf[full]"
+                        elif "mammoth" in stderr_text.lower():
+                            error_msg = "Missing dependency: mammoth is required for DOCX conversion. Please reinstall with: pip install marker-pdf[full]"
+                        elif "openpyxl" in stderr_text.lower():
+                            error_msg = "Missing dependency: openpyxl is required for Excel conversion. Please reinstall with: pip install marker-pdf[full]"
+                        elif "python-pptx" in stderr_text.lower():
+                            error_msg = "Missing dependency: python-pptx is required for PowerPoint conversion. Please reinstall with: pip install marker-pdf[full]"
+                        elif "ebooklib" in stderr_text.lower():
+                            error_msg = "Missing dependency: ebooklib is required for EPUB conversion. Please reinstall with: pip install marker-pdf[full]"
+                        elif captured_stderr:
+                            # Include part of the actual error
+                            if captured_stderr:
+                                error_msg = f"Marker error: {captured_stderr[-1][:200]}"
+                        
                         yield f"data: {json.dumps({'type': 'error', 'status': 'failed', 'message': error_msg})}\n\n"
                         yield {"return_code": return_code}  # Signal failure
                         return
@@ -644,10 +708,22 @@ class Extractor:
                     expected_extension = '.json'
                 
                 # Define source document extensions to exclude
-                source_extensions = ('.pdf', '.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tiff', '.pptx', '.docx', '.xlsx', '.epub')
+                source_extensions = (
+                    '.pdf',  # PDF
+                    '.png', '.jpg', '.jpeg', '.jpe', '.jif', '.jfif', '.jfi',  # JPEG variants
+                    '.gif', '.bmp', '.dib',  # Basic image formats
+                    '.tiff', '.tif',  # TIFF variants
+                    '.webp', '.ico', '.heic', '.heif',  # Modern image formats
+                    '.pptx',  # PowerPoint
+                    '.docx',  # Word
+                    '.xlsx', '.xls',  # Excel
+                    '.html', '.htm',  # HTML
+                    '.epub'  # E-books
+                )
                 
                 # Look for files with the expected extension
-                for root, dirs, files in os.walk(temp_dir):
+                output_dir = os.path.join(temp_dir, "output")
+                for root, dirs, files in os.walk(output_dir):  # Search in output directory
                     for file in files:
                         file_path = os.path.join(root, file)
                         # Look for files with the expected extension
@@ -658,7 +734,7 @@ class Extractor:
                 if not output_files:
                     # Fallback: look for any markdown, json, or html file
                     print(f"[SSE] No {expected_extension} files found, looking for any output file")
-                    for root, dirs, files in os.walk(temp_dir):
+                    for root, dirs, files in os.walk(output_dir):  # Search in output directory
                         for file in files:
                             file_path = os.path.join(root, file)
                             if file.endswith(('.md', '.json', '.html')) and not file.endswith('config.json') and not file.lower().endswith(source_extensions):
