@@ -341,6 +341,26 @@ async def list_sessions():
 @app.get("/ollama/status")
 async def check_ollama_status(base_url: str = "http://localhost:11434"):
     """Check if Ollama is running and list available models"""
+    ALLOWED_OLLAMA_URLS_STR = os.getenv("ALLOWED_OLLAMA_URLS")
+    allowed_urls = []
+    if ALLOWED_OLLAMA_URLS_STR:
+        allowed_urls = [url.strip() for url in ALLOWED_OLLAMA_URLS_STR.split(',')]
+
+    # Default localhost pattern
+    localhost_pattern = re.compile(r"^http://(localhost|127\.0\.0\.1):\d{1,5}$")
+
+    is_allowed = False
+    if base_url in allowed_urls:
+        is_allowed = True
+    elif localhost_pattern.match(base_url):
+        is_allowed = True
+
+    if not is_allowed:
+        return {
+            "status": "error",
+            "message": f"Provided Ollama base URL '{base_url}' is not allowed."
+        }
+
     try:
         # Check if Ollama is running
         response = requests.get(f"{base_url}/api/tags", timeout=5)
@@ -438,6 +458,7 @@ class Extractor:
             temp_dir = None
             session_id = str(int(time.time() * 1000))
             session_images_dir = os.path.join("extracted_images", session_id)
+            env = os.environ.copy()
             
             try:
                 # Log the received parameters
@@ -455,12 +476,6 @@ class Extractor:
                 
                 yield f"data: {json.dumps({'type': 'start', 'status': 'initializing', 'message': 'Starting extraction...', 'session_id': session_id})}\n\n"
                 await asyncio.sleep(0)
-                
-                # Load LLM model if needed
-                if llmService and not useLlm:
-                    load_status = await load_ollama_model(llmService)
-                    yield f"data: {json.dumps({'type': 'progress', 'status': 'model_loaded', 'message': f'Loaded {llmService} model', 'progress': 10})}\n\n"
-                    await asyncio.sleep(0)
                 
                 # Create output directory
                 output_dir = os.path.join(temp_dir, "output")
@@ -500,7 +515,15 @@ class Extractor:
                     if llmService == "gemini":
                         marker_cmd.extend(["--llm_service", "marker.services.google.GoogleService"])
                         if googleApiKey:
-                            env["GOOGLE_API_KEY"] = googleApiKey
+                            env["GOOGLE_API_KEY"] = googleApiKey  # This now uses the env defined above
+                    elif llmService == "openai":
+                        marker_cmd.extend(["--llm_service", "marker.services.openai.OpenAIService"])
+                        # Assuming OPENAI_API_KEY is expected to be in the environment by Marker CLI
+                        # If openaiApiKey were a form field, it would be:
+                        # if openaiApiKey: env["OPENAI_API_KEY"] = openaiApiKey
+                    elif llmService == "anthropic":
+                        marker_cmd.extend(["--llm_service", "marker.services.anthropic.AnthropicService"])
+                        # Assuming ANTHROPIC_API_KEY is expected to be in the environment by Marker CLI
                     elif llmService == "ollama":
                         marker_cmd.extend(["--llm_service", "marker.services.ollama.OllamaService"])
                         
@@ -538,13 +561,14 @@ class Extractor:
                 else:
                     timeout = 120  # 2 minutes for regular processing
                 
+                env['PYTHONUNBUFFERED'] = '1'
                 # Execute Marker command
                 process = await asyncio.create_subprocess_exec(
                     'marker',
                     *marker_cmd,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
-                    env={**os.environ, 'PYTHONUNBUFFERED': '1'}
+                    env=env
                 )
                 
                 yield f"data: {json.dumps({'type': 'progress', 'status': 'processing', 'message': 'Starting document processing...', 'progress': 15})}\n\n"
@@ -554,9 +578,10 @@ class Extractor:
                 total_pages = None
                 current_page = 0
                 
-                async def read_stream_generator(stream, stream_name):
-                    nonlocal total_pages, current_page
+                async def read_stream_generator(stream, stream_name, is_stderr_stream: bool = False):
+                    nonlocal total_pages, current_page # total_pages and current_page are from generate_progress's scope
                     buffer = ""
+                    raw_stderr_lines = [] if is_stderr_stream else None
                     
                     while True:
                         chunk = await stream.read(1024)
@@ -573,23 +598,26 @@ class Extractor:
                             if not line:
                                 continue
                             
+                            if is_stderr_stream and raw_stderr_lines is not None:
+                                raw_stderr_lines.append(line)
+
                             print(f"[SSE] {stream_name}: {line}")  # Debug
                             
                             # Always send debug logs first if debug mode is enabled
-                            if debugMode:
+                            if debugMode: # debugMode is from generate_progress's scope
                                 yield f"data: {json.dumps({'type': 'debug', 'message': f'[{stream_name}] {line}'})}\n\n"
                             
-                            # Update progress based on output
-                            if "Loading" in line and "model" in line:
+                            # Update progress based on output (typically from stdout)
+                            if not is_stderr_stream and "Loading" in line and "model" in line:
                                 yield f"data: {json.dumps({'type': 'progress', 'status': 'loading_models', 'message': 'Loading AI models...', 'progress': 12})}\n\n"
                             
-                            elif "Converting" in line:
+                            elif not is_stderr_stream and "Converting" in line:
                                 yield f"data: {json.dumps({'type': 'progress', 'status': 'converting', 'message': 'Converting document...', 'progress': 10})}\n\n"
                             
-                            elif "Dumped" in line and ("layout" in line or "PDF" in line or "document" in line):
+                            elif not is_stderr_stream and "Dumped" in line and ("layout" in line or "PDF" in line or "document" in line):
                                 yield f"data: {json.dumps({'type': 'progress', 'status': 'analyzing', 'message': 'Analyzing document structure...', 'progress': 30})}\n\n"
                             
-                            elif re.search(r'Processing page (\d+)', line):
+                            elif not is_stderr_stream and re.search(r'Processing page (\d+)', line):
                                 match = re.search(r'Processing page (\d+)', line)
                                 if match:
                                     current_page = int(match.group(1))
@@ -597,7 +625,7 @@ class Extractor:
                                         progress = 30 + int((current_page / total_pages) * 55)
                                         yield f"data: {json.dumps({'type': 'progress', 'status': 'processing_page', 'message': f'Processing page {current_page} of {total_pages}', 'progress': progress, 'current_page': current_page, 'total_pages': total_pages})}\n\n"
                             
-                            elif "Page" in line and "/" in line:
+                            elif not is_stderr_stream and "Page" in line and "/" in line:
                                 # Extract page numbers  
                                 page_match = re.search(r'Page (\d+)/(\d+)', line)
                                 if page_match:
@@ -608,86 +636,126 @@ class Extractor:
                                     page_progress = 30 + int((current_page / total_pages) * 55)
                                     yield f"data: {json.dumps({'type': 'progress', 'status': 'processing', 'message': f'Processing page {current_page} of {total_pages}', 'progress': page_progress, 'current_page': current_page, 'total_pages': total_pages})}\n\n"
                             
-                            elif "OCR" in line:
+                            elif not is_stderr_stream and "OCR" in line:
                                 yield f"data: {json.dumps({'type': 'progress', 'status': 'ocr', 'message': 'Running OCR on images...', 'progress': 20})}\n\n"
                             
-                            elif "Layout" in line or "detection" in line:
+                            elif not is_stderr_stream and "Layout" in line or "detection" in line:
                                 yield f"data: {json.dumps({'type': 'progress', 'status': 'layout_detection', 'message': 'Analyzing document layout...', 'progress': 25})}\n\n"
                             
-                            elif "LLM" in line or "Gemini" in line or "Ollama" in line:
+                            elif not is_stderr_stream and "LLM" in line or "Gemini" in line or "Ollama" in line:
                                 yield f"data: {json.dumps({'type': 'progress', 'status': 'llm_processing', 'message': 'Enhancing with AI...', 'progress': 87})}\n\n"
                             
-                            elif "Writing" in line or "Saving" in line:
+                            elif not is_stderr_stream and "Writing" in line or "Saving" in line:
                                 yield f"data: {json.dumps({'type': 'progress', 'status': 'saving', 'message': 'Saving results...', 'progress': 92})}\n\n"
                     
                     # Process any remaining data in buffer
                     if buffer.strip():
+                        if is_stderr_stream and raw_stderr_lines is not None: # Capture last line for stderr
+                            raw_stderr_lines.append(buffer.strip())
                         print(f"[SSE] {stream_name} (final): {buffer.strip()}")
-                
-                # Read streams concurrently
+
+                    if is_stderr_stream and raw_stderr_lines and len(raw_stderr_lines) > 0:
+                        yield {"type": "raw_stderr", "lines": raw_stderr_lines}
+
+                # monitor_process is now nested and has access to 'timeout' from generate_progress's scope
                 async def monitor_process():
                     error_messages = []
-                    captured_stderr = []
+                    captured_stderr = [] # For debug-mode JSON formatted stderr
+                    all_raw_stderr_lines = [] # For raw stderr lines
+                    return_code = None # Initialize return_code
                     
-                    async for output in read_stream_generator(process.stdout, "STDOUT"):
-                        yield output
+                    async for output_item in read_stream_generator(process.stdout, "STDOUT"):
+                        yield output_item
                     
-                    async for output in read_stream_generator(process.stderr, "STDERR"):
-                        # Capture error messages from stderr
-                        if '"type": "debug"' in output:
+                    async for output_item in read_stream_generator(process.stderr, "STDERR", is_stderr_stream=True):
+                        if isinstance(output_item, dict) and output_item.get("type") == "raw_stderr":
+                            all_raw_stderr_lines.extend(output_item["lines"])
+                            continue # This is not an SSE message for the client
+
+                        # The following part handles debug messages that might be formatted from stderr
+                        if '"type": "debug"' in output_item: # output_item here is expected to be a string from yield
                             try:
-                                # Extract the actual message from debug output
-                                data = json.loads(output.split("data: ")[1].strip())
+                                data = json.loads(output_item.split("data: ")[1].strip())
                                 if "[STDERR]" in data.get("message", ""):
                                     captured_stderr.append(data["message"].replace("[STDERR] ", ""))
                             except:
                                 pass
-                        error_messages.append(output)
-                        yield output
+                        # We still yield the original SSE formatted debug message
+                        error_messages.append(output_item)
+                        yield output_item
                     
-                    return_code = await process.wait()
-                    print(f"[SSE] Process completed with return code: {return_code}")
-                    
+                    try:
+                        return_code = await asyncio.wait_for(process.wait(), timeout=timeout)
+                        print(f"[SSE] Process completed with return code: {return_code}")
+                    except asyncio.TimeoutError:
+                        print(f"[SSE] Process timed out after {timeout} seconds.")
+                        yield f"data: {json.dumps({'type': 'error', 'status': 'failed', 'message': f'Processing timed out after {timeout} seconds. Try reducing the document size or disabling LLM processing.'})}\n\n"
+                        yield {"return_code": -1, "timeout_occurred": True}
+                        return
+                    except Exception as e:
+                        print(f"[SSE] Error waiting for process: {e}")
+                        yield f"data: {json.dumps({'type': 'error', 'status': 'failed', 'message': f'Error during process execution: {str(e)}'})}\n\n"
+                        yield {"return_code": -2, "error_occurred": True}
+                        return
+
                     if return_code != 0:
                         error_msg = "Marker conversion failed"
+                        stderr_text_debug = "\n".join(captured_stderr) # From JSON debug messages
                         
-                        # Check for common dependency errors in captured stderr
-                        stderr_text = "\n".join(captured_stderr)
+                        # Check for common dependency errors first using combined stderr info
+                        # For dependency checks, it's better to use all_raw_stderr_lines as it's more comprehensive
+                        # than captured_stderr which only works in debug mode.
+                        # However, the original code used captured_stderr (via stderr_text variable name) for this.
+                        # We'll prioritize raw_stderr_lines for richer error messages if debug JSON isn't available.
                         
-                        if "weasyprint" in stderr_text.lower():
+                        # Let's use all_raw_stderr_lines for dependency checks for robustness
+                        # Concatenate all_raw_stderr_lines to check for dependency errors
+                        full_stderr_for_dependencies = "\n".join(all_raw_stderr_lines).lower()
+
+                        if "weasyprint" in full_stderr_for_dependencies:
                             error_msg = "Missing dependency: weasyprint is required for DOCX conversion. Please reinstall with: pip install marker-pdf[full]"
-                        elif "mammoth" in stderr_text.lower():
+                        elif "mammoth" in full_stderr_for_dependencies:
                             error_msg = "Missing dependency: mammoth is required for DOCX conversion. Please reinstall with: pip install marker-pdf[full]"
-                        elif "openpyxl" in stderr_text.lower():
+                        elif "openpyxl" in full_stderr_for_dependencies:
                             error_msg = "Missing dependency: openpyxl is required for Excel conversion. Please reinstall with: pip install marker-pdf[full]"
-                        elif "python-pptx" in stderr_text.lower():
+                        elif "python-pptx" in full_stderr_for_dependencies:
                             error_msg = "Missing dependency: python-pptx is required for PowerPoint conversion. Please reinstall with: pip install marker-pdf[full]"
-                        elif "ebooklib" in stderr_text.lower():
+                        elif "ebooklib" in full_stderr_for_dependencies:
                             error_msg = "Missing dependency: ebooklib is required for EPUB conversion. Please reinstall with: pip install marker-pdf[full]"
-                        elif captured_stderr:
-                            # Include part of the actual error
-                            if captured_stderr:
-                                error_msg = f"Marker error: {captured_stderr[-1][:200]}"
+                        elif captured_stderr: # If debug mode captured something specific
+                            error_msg = f"Marker error (debug): {captured_stderr[-1][:200]}"
+                        elif all_raw_stderr_lines: # Fallback to raw stderr lines if no debug info
+                            error_detail = "\n".join(all_raw_stderr_lines[-3:]) # Last 3 lines
+                            error_msg = f"Marker error: {error_detail[:200]}" # Limit length
+                        # else error_msg remains "Marker conversion failed"
                         
                         yield f"data: {json.dumps({'type': 'error', 'status': 'failed', 'message': error_msg})}\n\n"
-                        yield {"return_code": return_code}  # Signal failure
+                        yield {"return_code": return_code}
                         return
                     
                     yield f"data: {json.dumps({'type': 'progress', 'status': 'finalizing', 'message': 'Processing output...', 'progress': 95})}\n\n"
                     await asyncio.sleep(0)
-                    yield {"return_code": return_code}  # Signal success
+                    yield {"return_code": return_code}
                     
                 # Run the process and monitor output
-                process_return_code = None
-                
+                process_outcome = None
                 async for output in monitor_process():
-                    if isinstance(output, dict) and "return_code" in output:
-                        process_return_code = output["return_code"]
+                    if isinstance(output, dict) and ("return_code" in output):
+                        process_outcome = output # Capture the whole dict
                     elif isinstance(output, str):
                         yield output
-                
-                # Only proceed if extraction was successful
-                if process_return_code != 0:
+
+                if process_outcome:
+                    timed_out = process_outcome.get("timeout_occurred", False)
+                    other_error = process_outcome.get("error_occurred", False)
+                    process_return_code = process_outcome.get("return_code")
+                    if timed_out or other_error or (process_return_code != 0 and process_return_code is not None):
+                        print(f"[SSE] Aborting due to process failure, timeout, or error. Outcome: {process_outcome}")
+                        return # Stop further processing
+                else:
+                    # This case should ideally not happen if monitor_process always yields a dict with return_code
+                    print("[SSE] Error: Did not receive process outcome from monitor_process.")
+                    yield f"data: {json.dumps({'type': 'error', 'status': 'failed', 'message': 'Internal server error: Failed to get process outcome.'})}\n\n"
                     return
                 
                 # Create session directory for images
