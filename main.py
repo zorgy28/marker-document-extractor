@@ -51,6 +51,7 @@ def copy_extracted_images(source_dir: str, dest_dir: str):
     
     # Find all image files in the source directory and subdirectories
     image_patterns = ['*.jpg', '*.jpeg', '*.png', '*.gif', '.bmp', '*.webp']
+    failed_copies = []
     
     for root, dirs, files in os.walk(source_dir):
         for pattern in image_patterns:
@@ -63,6 +64,8 @@ def copy_extracted_images(source_dir: str, dest_dir: str):
                         print(f"Copied image: {filename} to {dest_path}")
                     except Exception as e:
                         print(f"Error copying image {filename}: {e}")
+                        failed_copies.append(image_file) # Store full path or filename
+    return failed_copies
 
 app = FastAPI()
 
@@ -207,7 +210,17 @@ async def extract_document(
                     # Include part of the actual error
                     error_lines = stderr_output.strip().split('\n')
                     if error_lines:
-                        error_msg = f"Marker error: {error_lines[-1][:200]}"
+                        # Get the last 3 lines, or fewer if less than 3 lines available
+                        num_lines_to_show = min(len(error_lines), 3)
+                        relevant_error_lines = error_lines[-num_lines_to_show:]
+                        error_detail = "\n".join(relevant_error_lines)
+                        # Truncate to a maximum of ~500 characters to keep it manageable
+                        max_len = 500
+                        if len(error_detail) > max_len:
+                            error_detail = "... " + error_detail[-(max_len-5):] # Keep the end of the message
+                        error_msg = f"Marker error: {error_detail}"
+                    # else: error_msg remains "Marker conversion failed" (if stderr_output was whitespace)
+                # else: error_msg remains "Marker conversion failed" (if result.stderr was empty)
             
             return JSONResponse(
                 status_code=500,
@@ -236,46 +249,45 @@ async def extract_document(
                 for fname in os.listdir(output_dir):
                     print(f"Found file: {fname}")
                     if fname.endswith(file_extension):
-                        file_path = os.path.join(output_dir, fname)
-                        print(f"Reading output file: {file_path}")
-                        with open(file_path, "r") as out_f:
-                            if outputFormat == "json":
-                                extracted = json.load(out_f)
-                            else:
-                                content = out_f.read()
-                                # Update image paths to point to our served images
-                                content = update_image_paths(content, session_id)
-                                extracted = {"content": content, "format": outputFormat, "session_id": session_id}
-                        break
-            else:
-                print(f"Output directory {output_dir} does not exist!")
-        except Exception as e:
-            print(f"Error reading output directory: {e}")
-            
-        # Also check if there are any files in the temp directory itself
-        print(f"Temp directory contents after Marker: {os.listdir(tmp_dir)}")
-        
-        # Check for output files anywhere in temp directory recursively
-        for root, dirs, files in os.walk(tmp_dir):
-            for file in files:
-                if file.endswith(file_extension):
-                    file_path = os.path.join(root, file)
-                    print(f"Found output file in subdirectory: {file_path}")
-                    if extracted is None:
+                        current_file_path = os.path.join(output_dir, fname)
+                        print(f"Reading output file: {current_file_path}")
                         try:
-                            with open(file_path, "r") as out_f:
+                            with open(current_file_path, "r") as out_f:
                                 if outputFormat == "json":
                                     extracted = json.load(out_f)
                                 else:
                                     content = out_f.read()
+                                    # Update image paths to point to our served images
                                     content = update_image_paths(content, session_id)
                                     extracted = {"content": content, "format": outputFormat, "session_id": session_id}
-                            print(f"Successfully loaded output from: {file_path}")
+                            break
                         except Exception as e:
-                            print(f"Error reading output file {file_path}: {e}")
+                            print(f"Error reading processed output file {current_file_path}: {e}")
+                            return JSONResponse(
+                                status_code=500,
+                                content={"error": f"Failed to read processed output file '{os.path.basename(current_file_path)}': {str(e)}"}
+                            )
+            else:
+                print(f"Output directory {output_dir} does not exist!")
+        except Exception as e: # Catch errors from os.listdir or other unexpected issues
+            print(f"Error accessing output directory {output_dir}: {e}")
+            # Potentially return a generic error, or let it proceed to fallback.
+            # For now, just logging and allowing fallback.
+
+        # Fallback search removed. If file not found in output_dir, 'extracted' will be None.
+        # The copy_extracted_images function will still run over tmp_dir to get any images
+        # that might have been created even if the primary output file was not found in output_dir.
+        # This might be desired if, for example, only images were extracted.
 
         # Copy any extracted images to our served directory
-        copy_extracted_images(tmp_dir, session_images_dir)
+        image_copy_failures = copy_extracted_images(tmp_dir, session_images_dir)
+        if image_copy_failures:
+            print(f"Warning: Failed to copy some images: {image_copy_failures}")
+            if isinstance(extracted, dict): # Add to response if extracted is a dict
+                extracted["image_copy_warnings"] = image_copy_failures
+            # If outputFormat is "json" and extracted is not a dict (e.g., a list),
+            # it's harder to add warnings directly without changing structure.
+            # For now, server log is the primary notification for non-dict JSON.
 
         if extracted is None:
             return JSONResponse(
@@ -284,9 +296,15 @@ async def extract_document(
             )
 
         if outputFormat == "json":
+            # If it's JSON and not already a dict (e.g. from marker directly as list),
+            # we don't add warnings to it to preserve original structure.
+            # Logging above is the main way to know about image copy issues for this case.
             print(f"Extraction result: {json.dumps(extracted)[:500]}")
         else:
+            # For md/html, extracted is already a dict we created.
             print(f"Extraction result: {extracted['content'][:500]}")
+            if "image_copy_warnings" in extracted: # Log if warnings were added
+                 print(f"Image copy warnings: {extracted['image_copy_warnings']}")
         
         # Save preferences after successful extraction
         try:
@@ -825,7 +843,12 @@ class Extractor:
                 content = update_image_paths(content, session_id)
                 
                 # Copy extracted images
-                copy_extracted_images(temp_dir, session_images_dir)
+                image_copy_failures = copy_extracted_images(temp_dir, session_images_dir)
+                if image_copy_failures:
+                    print(f"[SSE] Warning: Failed to copy some images: {image_copy_failures}")
+                    # Yield a warning message via SSE
+                    yield f"data: {json.dumps({'type': 'warning', 'message': 'Some images could not be copied.', 'details': image_copy_failures})}\n\n"
+                    await asyncio.sleep(0) # Ensure message is sent
                 
                 yield f"data: {json.dumps({'type': 'progress', 'status': 'complete', 'message': 'Extraction complete!', 'progress': 100})}\n\n"
                 await asyncio.sleep(0)
